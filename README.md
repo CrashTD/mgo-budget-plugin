@@ -29,7 +29,7 @@ Quest controllers with an xrizer build without the controller fix, controllers i
 ## Install
 
 1. Download `MGOBudgetPlugin-<version>.zip` from [Releases](../../releases) and install it as a mod in Mod Organizer 2 (it contains `SKSE/Plugins/MGOBudgetPlugin.dll` and `.ini`).
-2. Remove from your launch options what the plugin now does: the budget layer variables (`MGO_BUDGET_FAKE_*`, `VK_ADD_LAYER_PATH`, `VK_LOADER_LAYERS_ENABLE`) and `DXVK_CONFIG=…`. Keep the rest, e.g. `PROTON_FSR4_UPGRADE=1 %command%`.
+2. If your launch options contain `DXVK_CONFIG=…`, remove it: the plugin sets these options now. If you used the budget layer, remove its variables too.
 3. **Quest owners:** set `QuestFixGenericProfile=1` in `MGOBudgetPlugin.ini`.
 4. Start the game once and look at `MGOBudgetPlugin.log` (with MO2 in `overwrite/SKSE/Plugins/`): it shows what was set and the health check results.
 
