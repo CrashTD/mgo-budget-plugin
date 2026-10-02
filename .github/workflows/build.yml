@@ -18,9 +18,9 @@ jobs:
           fetch-depth: 0
       - name: Install toolchain
         run: |
-          sudo dpkg --add-architecture i386
           sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64 clang-format clang-tidy wine64 zip
+          sudo apt-get install -y gcc-mingw-w64-x86-64 clang-tidy wine64 zip
+          pip install clang-format==19.1.7
       - name: Format check
         run: make format-check
       - name: Static analysis

@@ -4,6 +4,7 @@ CFLAGS  += -Wall -Wextra -Werror -std=c11
 NAME    := MGOBudgetPlugin
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 WINE    ?= wine
+CLANG_FORMAT ?= clang-format
 
 ifeq ($(origin CC),default)
 CC := x86_64-w64-mingw32-gcc
@@ -23,10 +24,10 @@ test: $(NAME).dll tests/skse_harness.exe
 	tests/run.sh
 
 format:
-	clang-format -i src/*.c tests/*.c
+	$(CLANG_FORMAT) -i src/*.c tests/*.c
 
 format-check:
-	clang-format --dry-run -Werror src/*.c tests/*.c
+	$(CLANG_FORMAT) --dry-run -Werror src/*.c tests/*.c
 
 TIDY_CHECKS := -*,clang-analyzer-*,bugprone-*,-bugprone-easily-swappable-parameters,-bugprone-reserved-identifier,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
 
