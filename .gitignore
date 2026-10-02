@@ -1,0 +1,5 @@
+MGOBudgetPlugin.dll
+tests/*.exe
+tests/work/
+dist/
+*.zip
