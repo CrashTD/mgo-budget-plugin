@@ -28,7 +28,7 @@ jobs:
       - name: Build
         run: make
       - name: Test under Wine
-        run: make test WINE=wine64
+        run: make test WINE="$(command -v wine64 || command -v wine || echo /usr/lib/wine/wine64)"
       - name: Package
         run: make dist
       - uses: actions/upload-artifact@v4

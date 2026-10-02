@@ -21,7 +21,7 @@ tests/skse_harness.exe: tests/skse_harness.c
 	$(CC) $(CFLAGS) -o $@ $<
 
 test: $(NAME).dll tests/skse_harness.exe
-	tests/run.sh
+	WINE="$(WINE)" tests/run.sh
 
 format:
 	$(CLANG_FORMAT) -i src/*.c tests/*.c
