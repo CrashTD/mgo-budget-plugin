@@ -24,7 +24,7 @@ Skyrim VR (MGO), RX 9070 XT, Quest 3 via WiVRn/xrizer at 2724x2853 per eye (WiVR
 | without the plugin | 37 (CSX stuck at native resolution) |
 | **with the plugin** | **74** |
 
-Quest controllers with an xrizer build without the controller fix, controllers idle while loading: VRIK reported `Vive Wands` without the plugin, `Oculus Rift controllers` with it.
+Quest controllers idle while loading: with xrizer without the controller fix VRIK reported `Vive Wands` without the plugin and `Oculus Rift controllers` with it; with stock xrizer (headset reported as `<unknown>`) and the plugin, also `Oculus Rift controllers`.
 
 ## Install
 
@@ -45,7 +45,7 @@ Quest controllers with an xrizer build without the controller fix, controllers i
 ## Limits
 
 - Tested with Skyrim VR 1.4.15, SKSE VR 2.0.12, CSX 3.19.1, proton-cachyos (native), WiVRn + xrizer, RX 9070 XT. Other setups are untested.
-- The controller fix is for Quest headsets. Stock xrizer does not tell the plugin which headset is connected, which is why it is opt-in.
+- The controller fix is for Quest headsets. Stock xrizer does not tell the plugin which headset is connected (tested: it reports `<unknown>`), which is why it is opt-in.
 - The budget only changes what CSX sees. If your card really runs out of memory, DXVK's own cap (`dxvk.maxMemoryBudget`) still decides.
 
 ## Build
