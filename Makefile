@@ -29,7 +29,8 @@ format:
 format-check:
 	$(CLANG_FORMAT) --dry-run -Werror src/*.c tests/*.c
 
-TIDY_CHECKS := -*,clang-analyzer-*,bugprone-*,-bugprone-easily-swappable-parameters,-bugprone-reserved-identifier,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling
+# casting-through-void: GetProcAddress results are cast via void * on purpose (gcc -Wcast-function-type).
+TIDY_CHECKS := -*,clang-analyzer-*,bugprone-*,-bugprone-easily-swappable-parameters,-bugprone-reserved-identifier,-clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,-bugprone-casting-through-void
 
 tidy:
 	clang-tidy --warnings-as-errors='*' --checks='$(TIDY_CHECKS)' src/*.c -- \
