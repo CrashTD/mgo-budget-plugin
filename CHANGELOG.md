@@ -1,3 +1,7 @@
+## Unreleased
+
+- **DevBench tools:** with the DevBench SKSE plugin installed, the plugin registers `mgobudget.status` (what it set and saw, including the last real DXGI budget and usage) and `mgobudget.set` (change the budget CSX sees while the game runs). Off with `[DevBench] Enabled=0`; nothing happens without DevBench.
+
 ## v0.1.0 (2026-10-03)
 
 First release.

@@ -14,6 +14,7 @@ Everything only runs under Wine/Proton. On Windows the plugin loads and does not
 | **DXVK options** | `d3d11.cachedDynamicResources=c` (+18 to +33 % with FSR4) and `dxvk.maxMemoryBudget` had to go into the launch options. | Sets them before the game starts its renderer. | `DXVK_CONFIG` in the launch options |
 | **Quest controllers** (opt-in) | If Quest controllers lie still or sleep while the save loads, WiVRn reports a generic profile, xrizer answers `<unknown>` and VRIK sets up Vive Wands: sticks and face buttons stay dead. | Reports those controllers as Oculus Touch. **Quest headsets only.** | the [xrizer fork](https://github.com/CrashTD/xrizer/tree/quest-vrik-controllers) |
 | **Health check** | Several known pitfalls fail silently. | Logs warnings for: Engine Fixes `bCullingFreedObjectCrash = true` (black screen), the 2013 `d3dcompiler_47.dll` from winetricks (CSX shaders fail), missing `Data\data` (slow startup), the generic controller profile. | checking by hand |
+| **DevBench tools** (only with [DevBench](https://github.com/alandtse/devbench)) | Checking what the plugin did means reading its log after the game. | Registers `mgobudget.status` (DXVK options, budget hook with the last real DXGI values, controller hook, health check) and `mgobudget.set` (memory budget live) with DevBench's local endpoint: `curl -X POST 127.0.0.1:8921/api/tool/mgobudget.status`. Does nothing without DevBench. | reading the log |
 
 ## Result
 
@@ -41,6 +42,7 @@ Quest controllers idle while loading: with xrizer without the controller fix VRI
 | `[Budget]` | `MiB` | `24000` | budget CSX sees for its render scale check, `0` = off |
 | `[Controller]` | `QuestFixGenericProfile` | `0` | `1` = report idle Quest controllers as Touch. Stays off if the headset clearly reports another vendor. |
 | `[Check]` | `Enabled` | `1` | health check at startup |
+| `[DevBench]` | `Enabled` | `1` | register the DevBench tools (only if DevBench is installed) |
 
 ## Limits
 

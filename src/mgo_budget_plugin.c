@@ -29,6 +29,12 @@
  *
  * 4. Health check ([Check] Enabled=): logs known Proton pitfalls ([check] OK/WARN/INFO).
  *
+ * 5. DevBench tools ([DevBench] Enabled=): if the DevBench SKSE plugin is installed, registers
+ *    mgobudget.status (what the plugin set and saw) and mgobudget.set (budget live) with its
+ *    local REST/MCP endpoint, e.g. curl -X POST 127.0.0.1:8921/api/tool/mgobudget.status.
+ *    Interface fetched at kDataLoaded as in DevBench's MIT-licensed DevBenchAPI.h/.cpp
+ *    (github.com/alandtse/devbench, include/), declared locally in C below.
+ *
  * Old SKSE plugin interface (SKSEPlugin_Query/Load), structures declared locally, no
  * CommonLib. Build: see Makefile.
  */
@@ -36,6 +42,7 @@
 #include <windows.h>
 #include <dxgi1_4.h>
 #include <stdarg.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -58,12 +65,38 @@ typedef struct {
     UInt32 version;
 } PluginInfo;
 
+/* SKSE messaging (PluginAPI.h): kInterface_Messaging = 5, kMessage_DataLoaded = 8 */
+typedef struct {
+    const char *sender;
+    UInt32 type;
+    UInt32 dataLen;
+    void *data;
+} SKSEMessage;
+
+typedef void (*SKSEEventCallback)(SKSEMessage *msg);
+
+typedef struct {
+    UInt32 interfaceVersion;
+    bool (*RegisterListener)(UInt32 listener, const char *sender, SKSEEventCallback handler);
+    bool (*Dispatch)(UInt32 sender, UInt32 messageType, void *data, UInt32 dataLen, const char *receiver);
+} SKSEMessagingInterface;
+
+enum { kInterfaceMessaging = 5, kMessageDataLoaded = 8 };
+
 #define PLUGIN_NAME "MGOBudgetPlugin"
 #define PLUGIN_VERSION 1
 
 static HMODULE g_self;
 static char g_dir[MAX_PATH];
 static FILE *g_log;
+
+/* What the plugin set and saw, for mgobudget.status */
+static const char *g_wine;
+static int g_budgetHooked;
+static volatile LONG64 g_lastUsage, g_lastRealBudget;
+static volatile LONG g_queryCount;
+static int g_controllerArmed, g_controllerHooked;
+static volatile LONG g_questRewrites;
 
 static void logf_(const char *fmt, ...)
 {
@@ -133,20 +166,25 @@ static const IID kIID_IDXGIAdapter3 = {0x645967a4, 0x1392, 0x4310, {0xa7, 0x98, 
 typedef HRESULT(STDMETHODCALLTYPE *QueryVideoMemoryInfoFn)(IDXGIAdapter3 *, UINT, DXGI_MEMORY_SEGMENT_GROUP,
                                                            DXGI_QUERY_VIDEO_MEMORY_INFO *);
 static QueryVideoMemoryInfoFn g_origQuery;
-static UINT64 g_budgetBytes;
+static volatile LONG64 g_budgetBytes; /* written live by mgobudget.set, 0 = pass the real budget through */
 static volatile LONG g_queryLogs;
 
 static HRESULT STDMETHODCALLTYPE hooked_query(IDXGIAdapter3 *self, UINT node, DXGI_MEMORY_SEGMENT_GROUP group,
                                               DXGI_QUERY_VIDEO_MEMORY_INFO *info)
 {
     HRESULT hr = g_origQuery(self, node, group, info);
-    if (SUCCEEDED(hr) && info && group == DXGI_MEMORY_SEGMENT_GROUP_LOCAL && info->Budget < g_budgetBytes) {
-        UINT64 real = info->Budget;
-        info->Budget = g_budgetBytes;
+    if (FAILED(hr) || !info || group != DXGI_MEMORY_SEGMENT_GROUP_LOCAL)
+        return hr;
+    UINT64 real = info->Budget, want = (UINT64)g_budgetBytes;
+    g_lastUsage = (LONG64)info->CurrentUsage;
+    g_lastRealBudget = (LONG64)real;
+    InterlockedIncrement(&g_queryCount);
+    if (real < want) {
+        info->Budget = want;
         if (InterlockedIncrement(&g_queryLogs) <= 5)
             logf_("QueryVideoMemoryInfo local: usage %llu MiB, budget %llu -> %llu MiB",
                   (unsigned long long)(info->CurrentUsage >> 20u), (unsigned long long)(real >> 20u),
-                  (unsigned long long)(g_budgetBytes >> 20u));
+                  (unsigned long long)(want >> 20u));
     }
     return hr;
 }
@@ -160,7 +198,7 @@ static void install_budget_hook(void)
         logf_("[Budget] MiB=0 or missing, budget hook off");
         return;
     }
-    g_budgetBytes = (UINT64)mib << 20u;
+    g_budgetBytes = (LONG64)((UINT64)mib << 20u);
 
     HMODULE dxgi = LoadLibraryA("dxgi.dll");
     HRESULT(WINAPI * create)(REFIID, void **) =
@@ -189,6 +227,7 @@ static void install_budget_hook(void)
     *slot = (void *)hooked_query;
     VirtualProtect((void *)slot, sizeof(void *), old, &old);
     FlushInstructionCache(GetCurrentProcess(), (const void *)slot, sizeof(void *));
+    g_budgetHooked = 1;
     logf_("budget hook installed: local budget at least %u MiB (vtable slot %p)", mib, (void *)slot);
 
 out:
@@ -304,6 +343,7 @@ static UInt32 hooked_get_string(void *self, UInt32 device, int prop, char *buf, 
     } else if (err) {
         *err = kPropErrBufferTooSmall;
     }
+    InterlockedIncrement(&g_questRewrites);
     if (InterlockedIncrement(&g_ctlLogs) <= 12)
         logf_("controller %u: generic profile, prop %d -> \"%s\"", device, prop, value);
     return need;
@@ -327,9 +367,10 @@ static void *hooked_get_interface(const char *version, int *err)
         void **vtbl = *(void ***)iface;
         g_origGetRole = (GetIntFn)vtbl[kSlotGetControllerRole];
         g_origGetClass = (GetIntFn)vtbl[kSlotGetDeviceClass];
-        if (patch_slot(&vtbl[kSlotGetStringProperty], (void *)hooked_get_string, (void **)&g_origGetString))
+        if (patch_slot(&vtbl[kSlotGetStringProperty], (void *)hooked_get_string, (void **)&g_origGetString)) {
+            g_controllerHooked = 1;
             logf_("controller hook installed on %s (vtable %p)", version, (void *)vtbl);
-        else
+        } else
             logf_("controller hook: VirtualProtect failed (%lu)", (unsigned long)GetLastError());
     }
     return iface;
@@ -367,6 +408,7 @@ static void install_controller_hook(void)
     logf_("[Controller] QuestFixGenericProfile=%d (hook also watches for the generic profile when off)", g_questFixOn);
     g_origGetInterface =
         (GetGenericInterfaceFn)patch_import("openvr_api.dll", "VR_GetGenericInterface", (void *)hooked_get_interface);
+    g_controllerArmed = g_origGetInterface != NULL;
     logf_(g_origGetInterface ? "controller hook armed (VR_GetGenericInterface import wrapped)"
                              : "controller hook: VR_GetGenericInterface import not found");
 }
@@ -456,6 +498,150 @@ static void run_health_check(void)
     logf_("[check] done, %d warning(s); the controller check runs when the game asks for controllers", g_checkWarnings);
 }
 
+/* ---- DevBench tools ---- */
+
+/* DevBenchAPI.h: IDevBenchInterface001 is a C++ object; its vtable lists the virtual functions in
+ * declaration order, `this` comes first (MSVC x64). Only the first three slots are used here. */
+typedef void (*DevBenchWriteFn)(void *sink, const char *resultJson);
+typedef void (*DevBenchToolFn)(void *ctx, const char *argsJson, void *sink, DevBenchWriteFn write);
+
+typedef struct DevBench DevBench;
+typedef struct {
+    unsigned (*GetBuildNumber)(DevBench *self);
+    bool (*RegisterTool)(DevBench *self, const char *name, const char *descriptorJson, DevBenchToolFn handler,
+                         void *ctx);
+    void (*EmitEvent)(DevBench *self, const char *topic, const char *payloadJson);
+} DevBenchVtbl;
+struct DevBench {
+    const DevBenchVtbl *vtbl;
+};
+
+typedef struct {
+    void *(*GetApiFunction)(unsigned revision);
+} DevBenchMessage;
+
+enum { kDevBenchGetInterface = 0x9a3f1c08 };
+
+static UInt32 g_pluginHandle;
+static const SKSEMessagingInterface *g_messaging;
+
+/* Copies s into out as JSON string content (without quotes). */
+static void json_escape(const char *s, char *out, size_t size)
+{
+    size_t n = 0;
+    for (; s && *s && n + 7 < size; s++) {
+        unsigned char c = (unsigned char)*s;
+        if (c == '"' || c == '\\') {
+            out[n++] = '\\';
+            out[n++] = (char)c;
+        } else if (c < 0x20) {
+            n += (size_t)snprintf(out + n, size - n, "\\u%04x", c);
+        } else {
+            out[n++] = (char)c;
+        }
+    }
+    out[n] = '\0';
+}
+
+static void tool_status(void *ctx, const char *argsJson, void *sink, DevBenchWriteFn write)
+{
+    (void)ctx;
+    (void)argsJson;
+    char env[2048] = "", wine[64], dxvk[sizeof(env) * 2], out[8192];
+    GetEnvironmentVariableA("DXVK_CONFIG", env, sizeof(env));
+    json_escape(g_wine, wine, sizeof(wine));
+    json_escape(env, dxvk, sizeof(dxvk));
+    snprintf(out, sizeof(out),
+             "{\"plugin\":\"%s\",\"version\":%d,\"wine\":\"%s\",\"dxvkConfig\":\"%s\","
+             "\"budget\":{\"hooked\":%s,\"reportedMiB\":%llu,\"queries\":%ld,\"lastUsageMiB\":%llu,"
+             "\"lastRealBudgetMiB\":%llu},"
+             "\"controller\":{\"armed\":%s,\"hooked\":%s,\"questFix\":%s,\"questHmd\":%d,\"rewrites\":%ld},"
+             "\"check\":{\"warnings\":%d}}",
+             PLUGIN_NAME, PLUGIN_VERSION, wine, dxvk, g_budgetHooked ? "true" : "false",
+             (unsigned long long)((UINT64)g_budgetBytes >> 20u), (long)g_queryCount,
+             (unsigned long long)((UINT64)g_lastUsage >> 20u), (unsigned long long)((UINT64)g_lastRealBudget >> 20u),
+             g_controllerArmed ? "true" : "false", g_controllerHooked ? "true" : "false",
+             g_questFixOn ? "true" : "false", g_questHmd, (long)g_questRewrites, g_checkWarnings);
+    write(sink, out);
+}
+
+static void tool_set(void *ctx, const char *argsJson, void *sink, DevBenchWriteFn write)
+{
+    (void)ctx;
+    const char *p = argsJson ? strstr(argsJson, "\"mib\"") : NULL;
+    if (p)
+        p = strchr(p + 5, ':');
+    char *end = NULL;
+    long mib = p ? strtol(p + 1, &end, 10) : -1;
+    if (!p || end == p + 1 || mib < 0 || mib > 65536) {
+        write(sink, "{\"ok\":false,\"error\":\"expected {\\\"mib\\\": 0..65536}\"}");
+        return;
+    }
+    if (!g_budgetHooked) {
+        write(sink, "{\"ok\":false,\"error\":\"budget hook not installed ([Budget] MiB=0 at startup)\"}");
+        return;
+    }
+    LONG64 before = InterlockedExchange64(&g_budgetBytes, (LONG64)((UINT64)mib << 20u));
+    logf_("mgobudget.set: budget %llu -> %ld MiB", (unsigned long long)((UINT64)before >> 20u), mib);
+    char out[160];
+    snprintf(out, sizeof(out), "{\"ok\":true,\"previousMiB\":%llu,\"reportedMiB\":%ld}",
+             (unsigned long long)((UINT64)before >> 20u), mib);
+    write(sink, out);
+}
+
+static void register_devbench_tools(void)
+{
+    DevBenchMessage msg = {NULL};
+    /* As in DevBenchAPI.cpp: dataLen is sizeof a pointer (never read by the host), and only the
+     * filled-in function counts, not Dispatch's return value. */
+    g_messaging->Dispatch(g_pluginHandle, kDevBenchGetInterface, &msg, sizeof(void *), "devbench");
+    if (!msg.GetApiFunction) {
+        logf_("DevBench not found, tools not registered");
+        return;
+    }
+    DevBench *db = (DevBench *)msg.GetApiFunction(1);
+    if (!db) {
+        logf_("DevBench returned no interface");
+        return;
+    }
+    db->vtbl->RegisterTool(db, "mgobudget.status",
+                           "{\"description\":\"MGO Budget Plugin: what it set and saw (DXVK_CONFIG, memory budget "
+                           "hook with the last real DXGI values, controller hook, health check)\","
+                           "\"inputSchema\":{\"type\":\"object\",\"properties\":{}},\"readOnly\":true}",
+                           tool_status, NULL);
+    db->vtbl->RegisterTool(db, "mgobudget.set",
+                           "{\"description\":\"MGO Budget Plugin: set the memory budget (MiB) Community Shaders sees, "
+                           "live; 0 = the real budget. Needs [Budget] MiB > 0 at startup.\","
+                           "\"inputSchema\":{\"type\":\"object\",\"properties\":{\"mib\":{\"type\":\"integer\","
+                           "\"minimum\":0,\"maximum\":65536}},\"required\":[\"mib\"]},\"readOnly\":false}",
+                           tool_set, NULL);
+    logf_("DevBench build %u: tools mgobudget.status and mgobudget.set registered", db->vtbl->GetBuildNumber(db));
+}
+
+static void on_skse_message(SKSEMessage *msg)
+{
+    if (msg && msg->type == kMessageDataLoaded)
+        register_devbench_tools();
+}
+
+static void listen_for_devbench(const SKSEInterface *skse)
+{
+    char ini[MAX_PATH + 32];
+    snprintf(ini, sizeof(ini), "%s%s.ini", g_dir, PLUGIN_NAME);
+    if (!GetPrivateProfileIntA("DevBench", "Enabled", 1, ini)) {
+        logf_("[DevBench] Enabled=0, no tools");
+        return;
+    }
+    if (skse->QueryInterface)
+        g_messaging = (const SKSEMessagingInterface *)skse->QueryInterface(kInterfaceMessaging);
+    if (!g_messaging || !g_messaging->RegisterListener(g_pluginHandle, "SKSE", on_skse_message)) {
+        logf_("DevBench: no SKSE messaging interface, tools not registered");
+        g_messaging = NULL;
+        return;
+    }
+    logf_("DevBench: waiting for kDataLoaded to register tools");
+}
+
 __declspec(dllexport) BOOL SKSEPlugin_Query(const SKSEInterface *skse, PluginInfo *info)
 {
     info->infoVersion = 1;
@@ -473,16 +659,20 @@ __declspec(dllexport) BOOL SKSEPlugin_Load(const SKSEInterface *skse)
 
     logf_("%s %d loaded, SKSE 0x%08x, runtime 0x%08x", PLUGIN_NAME, PLUGIN_VERSION, skse ? skse->skseVersion : 0,
           skse ? skse->runtimeVersion : 0);
-    const char *wine = wine_version();
-    if (!wine) {
+    g_wine = wine_version();
+    if (!g_wine) {
         logf_("not running under Wine, doing nothing");
         return TRUE;
     }
-    logf_("Wine %s", wine);
+    logf_("Wine %s", g_wine);
     apply_dxvk_config();
     install_budget_hook();
     install_controller_hook();
     run_health_check();
+    if (skse) {
+        g_pluginHandle = skse->GetPluginHandle ? skse->GetPluginHandle() : 0;
+        listen_for_devbench(skse);
+    }
     return TRUE;
 }
 
