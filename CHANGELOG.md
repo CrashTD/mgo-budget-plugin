@@ -1,4 +1,4 @@
-## Unreleased
+## v0.2.0 (2026-10-05)
 
 - **Docs: memory cap.** `dxvk.maxMemoryBudget=13500` is tuned for 16 GB cards and needed: without it the frame rate collapses (13–19 fps instead of 34–35). `RADV_PERFTEST=nogttspill` does not replace it. README section "Memory cap", INI comment updated.
 - **DevBench tools:** with the DevBench SKSE plugin installed, the plugin registers `mgobudget.status` (what it set and saw, including the last real DXGI budget and usage) and `mgobudget.set` (change the budget CSX sees while the game runs). Off with `[DevBench] Enabled=0`; nothing happens without DevBench.

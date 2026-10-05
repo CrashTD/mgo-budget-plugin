@@ -84,7 +84,7 @@ typedef struct {
 enum { kInterfaceMessaging = 5, kMessageDataLoaded = 8 };
 
 #define PLUGIN_NAME "MGOBudgetPlugin"
-#define PLUGIN_VERSION 1
+#define PLUGIN_VERSION 2
 
 static HMODULE g_self;
 static char g_dir[MAX_PATH];
